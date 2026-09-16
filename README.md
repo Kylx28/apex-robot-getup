@@ -1,4 +1,4 @@
-# APEX Robot Get-Up
+# Robot Get-Up Using Action Priors
 
 A MuJoCo research project for training the 29-DoF Unitree G1 to stand up from
 fallen poses. The ultimate goal is to use action priors to
