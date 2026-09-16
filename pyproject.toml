@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apex-robot-getup"
+version = "0.1.0"
+description = "Minimal MuJoCo environment for Unitree G1 get-up research"
+requires-python = ">=3.10"
+dependencies = [
+  "mujoco>=3.1,<4",
+  "matplotlib>=3.7",
+  "numpy>=1.24",
+  "pyarrow>=14",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+apex_getup = ["models/unitree_g1/*.xml", "models/unitree_g1/*.md", "models/unitree_g1/LICENSE", "models/unitree_g1/assets/*.STL"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
