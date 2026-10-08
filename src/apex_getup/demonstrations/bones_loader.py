@@ -72,6 +72,28 @@ def _numeric_column(rows: list[dict[str, str]], column: str) -> NDArray[np.float
     return values
 
 
+def finite_difference_velocity(
+    positions: NDArray[np.float64], timestep: float
+) -> NDArray[np.float64]:
+    """Match the released environment's trajectory velocity convention.
+
+    Interior samples use a centered difference. The first and last samples
+    use forward and backward differences respectively, so frame zero has the
+    motion's initial velocity and the terminal velocity remains defined while
+    the final reference frame is held.
+    """
+    values = np.asarray(positions, dtype=np.float64)
+    if values.ndim != 2 or len(values) < 2 or not np.all(np.isfinite(values)):
+        raise ValueError("positions must be a finite 2-D array with at least two rows")
+    if not np.isfinite(timestep) or timestep <= 0:
+        raise ValueError("timestep must be positive and finite")
+    velocity = np.zeros_like(values)
+    velocity[1:-1] = (values[2:] - values[:-2]) / (2.0 * timestep)
+    velocity[0] = (values[1] - values[0]) / timestep
+    velocity[-1] = (values[-1] - values[-2]) / timestep
+    return velocity
+
+
 def load_bones_csv(
     path: Path | str,
     *,
@@ -110,8 +132,9 @@ def load_bones_csv(
 
     # BONES G1 joint DoFs are degrees; environment joints are radians.
     q = np.deg2rad(np.column_stack([_numeric_column(rows, name) for name in ordered_joint_columns]))
-    edge_order = 2 if len(time) >= 3 else 1
-    qd = np.gradient(q, time, axis=0, edge_order=edge_order)
+    # Match the released fixed-rate forward/central/backward convention. In
+    # particular, frame zero is not NumPy's second-order endpoint estimate.
+    qd = finite_difference_velocity(q, 1.0 / original_fps)
 
     root_position_presence = [name in columns for name in ROOT_POSITION_COLUMNS]
     if any(root_position_presence) and not all(root_position_presence):

@@ -1,19 +1,37 @@
-# Robot Get-Up Using Action Priors
+# APEX Robot Get-Up
 
-A MuJoCo research project for training the 29-DoF Unitree G1 to stand up from
-fallen poses. The ultimate goal is to use action priors to
-guide exploration and train standing up end to end, while producing a final
-policy that runs from robot state alone without a reference trajectory.
+MuJoCo research code for training the 29-actuator Unitree G1 to stand from a
+fallen pose. The long-term goal is a reference-free get-up policy trained with
+APEX-style action priors.
 
-The repository currently includes:
+## Current status
 
-- A deterministic G1 MuJoCo environment with normalized joint-position actions
-- Joint-space PD control and contact/state diagnostics
-- BONES-SEED loading, preprocessing, and replay
-- A fixed-fallen-state task and vanilla PPO baseline
+The project has a successful rigid-ground residual-PPO baseline from the fixed
+frame-zero supine pose.
 
-APEX action priors, style rewards, multiple critics, randomized falls, and
-domain randomization are planned for later milestones.
+In its recorded deterministic evaluation, it reached sustained standing in
+7.60 s, finished at 0.795 m pelvis height and 0.985 uprightness, and remained
+stable for 4.62 s. This policy is still reference-conditioned: it corrects the
+prior trajectory and is not yet the final reference-free APEX policy.
+
+Full APEX task/style critics, randomized fallen
+poses, multiple demonstrations, and domain randomization remain future work.
+
+## Training framework
+
+- MuJoCo G1 with 29 actuated joints on rigid ground.
+- Native position actuators with the official joint-group PD gains.
+- 0.002 s physics timestep and 8 substeps per action (62.5 Hz control).
+- Native 120 Hz reference queried by simulation time, with configurable
+  quaternion interpolation.
+- Physical residual action
+  `q_cmd = clip_to_limits(q_ref + 0.25 * policy_action)`.
+- 255-Dimensional reference-conditioned observation
+- MuJoCo rollout collection with batched policy inference.
+- Stable-Baselines3 PPO is used by the successful configuration; the native
+  PyTorch PPO backend remains available for experiments.
+- Deterministic frame-zero evaluation selects the best checkpoint independently
+  of periodic checkpoint snapshots.
 
 ## Installation
 
@@ -27,93 +45,69 @@ python -m pip install -e '.[test]'
 pytest
 ```
 
-The interactive viewer requires a desktop/OpenGL session. Use `--headless` on
-servers or in environments without a display.
+The live MuJoCo viewer requires a desktop/OpenGL session.
 
-## Running the project
+## Data and validation
 
-View or smoke-test the environment:
-
-```bash
-python scripts/view_env.py --pose supine
-python scripts/view_env.py --pose prone --headless --duration 2
-```
-
-Place BONES-SEED under `datasets/bones-seed`, then inspect and preprocess the
-selected get-up motion:
-
-```bash
-python scripts/inspect_bones_dataset.py --samples 2
-python scripts/find_getup_demos.py --limit 20
-python scripts/preprocess_demo.py --motion stand_up_lying_R_002__A473
-```
-
-Replay or calibrate the motion:
-
-```bash
-python scripts/replay_demo.py --motion stand_up_lying_R_002__A473 --mode kinematic
-python scripts/replay_demo.py --motion stand_up_lying_R_002__A473 --mode dynamic --headless
-python scripts/sweep_pd_gains.py --motion stand_up_lying_R_002__A473
-```
-
-Run the task-only PPO baseline:
-
-```bash
-python scripts/evaluate_baselines.py
-python scripts/train_ppo.py --total-steps 100000
-python scripts/evaluate_ppo.py \
-  --checkpoint artifacts/ppo/milestone3/best.npz \
-  --episodes 5 \
-  --reward-plot artifacts/ppo/milestone3/reward_components.png
-```
-
-Record a headless rollout when EGL is available:
-
-```bash
-MUJOCO_GL=egl python scripts/evaluate_ppo.py \
-  --checkpoint artifacts/ppo/milestone3/best.npz \
-  --episodes 1 \
-  --record-gif artifacts/ppo/milestone3/representative.gif
-```
-
-## Core conventions
-
-Actions are normalized 29-vectors in `[-1, 1]`. Each action spans the full
-finite MuJoCo range of its corresponding joint:
+Place the A475 (get up from supine) motion at:
 
 ```text
-q_center = (q_min + q_max) / 2
-q_scale  = (q_max - q_min) / 2
-q_target = q_center + q_scale * action
+datasets/stand_up_lying_R_002__A475_new.csv
 ```
 
-The controller applies
-`tau = kp * (q_target - q) - kd * qdot`, with default gains `kp=60` and `kd=3`.
-Defaults are a 0.002 s simulation timestep and a 50 Hz control rate.
+## Train
 
-The PPO actor receives a 97-value proprioceptive observation containing
-projected gravity, normalized joint state, torso-frame root velocity, pelvis
-height, and the previous action. It receives no demonstration or reference
-information. BONES-SEED is used only to define the fixed fallen reset pose in
-the current baseline.
+The main residual-policy experiment uses 20 environments, 2,048 rollout steps,
+SB3 PPO, and frame-zero resets:
 
-## Model and outputs
+```bash
+python scripts/train_apex_prior.py \
+  --config configs/residual_policy_milestone_1.yaml
+```
 
-The vendored `g1_29dof_rev_1_0` model comes from MuJoCo Menagerie under its
-included BSD-3-Clause license. Its position actuators were replaced with
-unit-gear torque motors so PD control can be implemented explicitly in Python.
+YAML contains the complete simulator, controller, reward, PPO, normalization,
+and output configuration. Explicit CLI options override supported YAML values.
 
-Generated demonstrations, calibration results, checkpoints, plots, metrics,
-and rollout recordings are written beneath `datasets/processed/` and
-`artifacts/`.
+## Evaluate and render
 
-## Reference
+Evaluate the preserved successful policy with the configuration from its
+original run:
 
-This project builds on the action-prior approach introduced by Shivam Sood et
-al. in [APEX: Action Priors Enable Efficient Exploration for Robust Motion
-Tracking on Legged Robots](https://arxiv.org/pdf/2505.10022) (arXiv:2505.10022).
+```bash
+python scripts/evaluate_residual_ppo.py \
+  --checkpoint artifacts/baselines/stage-b-frame0-residual-success-seed1-57M/best.zip \
+  --config configs/stage_b_frame0_paper_timing.yaml \
+  --residual-scale 0.25 \
+  --mode residual \
+  --episodes 5
+```
+
+Render one deterministic episode by adding `--render` and using one episode:
+
+```bash
+python scripts/evaluate_residual_ppo.py \
+  --checkpoint artifacts/baselines/stage-b-frame0-residual-success-seed1-57M/best.zip \
+  --config configs/stage_b_frame0_paper_timing.yaml \
+  --residual-scale 0.25 \
+  --mode residual \
+  --episodes 1 \
+  --render
+```
+
+Training outputs, checkpoints, normalization statistics, metrics, and plots are
+stored under `artifacts/`. See [COMMANDS.md](COMMANDS.md) for additional replay,
+ablation, plotting, and testing commands.
+
+## References
+
+- [APEX: Action Priors Enable Efficient Exploration for Robust Motion Tracking
+  on Legged Robots](https://arxiv.org/pdf/2505.10022)
+- [Demonstration-Guided Humanoid Stand-Up on an Emulated Deformable
+  Surface](https://arxiv.org/pdf/2608.20852)
+
+The vendored MuJoCo Menagerie Unitree G1 model retains its included
+BSD-3-Clause license.
 
 ## Disclaimer
 
-OpenAI Codex was used to assist with the development and documentation of this
-project.
+OpenAI Codex was used to assist with development and documentation.

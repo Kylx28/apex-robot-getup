@@ -13,6 +13,38 @@ from numpy.typing import NDArray
 from apex_getup.env.config import JOINT_NAMES, NUM_ACTUATORS
 
 
+def reference_index_for_episode_step(
+    frame_count: int, episode_step: int, *, start_index: int = 0
+) -> int:
+    """Return the clamped reference target index for one control transition.
+
+    Control step zero advances the simulation from the reset state at
+    ``start_index`` toward the next reference sample.  Keeping this indexing in
+    one function prevents the action prior and reference-conditioned
+    observation from drifting apart.
+    """
+    if frame_count < 2:
+        raise ValueError("a reference trajectory requires at least two frames")
+    if episode_step < 0 or not 0 <= start_index < frame_count:
+        raise ValueError("episode_step/start_index is outside the reference")
+    return min(start_index + episode_step + 1, frame_count - 1)
+
+
+@dataclass(frozen=True)
+class ReferenceSample:
+    """One trajectory state interpolated at an absolute reference time."""
+
+    time: float
+    phase: float
+    q: NDArray[np.float64]
+    qd: NDArray[np.float64]
+    root_pos: NDArray[np.float64] | None
+    root_quat: NDArray[np.float64] | None
+    lower_index: int
+    upper_index: int
+    interpolation: float
+
+
 def _readonly_float_array(value: object, shape: tuple[int | None, ...], name: str) -> NDArray[np.float64]:
     array = np.asarray(value, dtype=np.float64)
     if array.ndim != len(shape) or any(
@@ -40,6 +72,23 @@ def normalize_quaternions(quaternions: object) -> NDArray[np.float64]:
         if np.dot(q[index - 1], q[index]) < 0:
             q[index] *= -1
     return q
+
+
+def _quaternion_multiply(
+    first: NDArray[np.float64], second: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Multiply two ``wxyz`` quaternions."""
+    w1, x1, y1, z1 = first
+    w2, x2, y2, z2 = second
+    return np.array(
+        [
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        ],
+        dtype=np.float64,
+    )
 
 
 def _slerp_pair(q0: NDArray[np.float64], q1: NDArray[np.float64], amount: float) -> NDArray[np.float64]:
@@ -129,6 +178,86 @@ class ReferenceTrajectory:
     def original_timestep(self) -> float | None:
         return None if self.original_fps == 0 else 1.0 / self.original_fps
 
+    def sample(
+        self, query_time: float, *, interpolate: bool = True
+    ) -> ReferenceSample:
+        """Query the native trajectory at ``query_time`` in seconds.
+
+        When ``interpolate`` is true, vectors are linearly interpolated and
+        root orientation uses SLERP. When false, the query uses the paper's
+        nearest-frame rule, ``round(t / reference_dt)``. Times outside the
+        motion are clamped. The final sample retains its backward-difference
+        joint velocity, matching the released environment.
+        """
+        if not np.isfinite(query_time):
+            raise ValueError("reference query time must be finite")
+        clamped_time = float(np.clip(query_time, self.time[0], self.time[-1]))
+        if not interpolate:
+            reference_dt = float(np.median(np.diff(self.time)))
+            index = int(round(clamped_time / reference_dt))
+            index = int(np.clip(index, 0, len(self.time) - 1))
+            return ReferenceSample(
+                time=float(self.time[index]),
+                phase=index / max(1, len(self.time) - 1),
+                q=self.q[index].copy(),
+                qd=self.qd[index].copy(),
+                root_pos=(
+                    None if self.root_pos is None else self.root_pos[index].copy()
+                ),
+                root_quat=(
+                    None if self.root_quat is None else self.root_quat[index].copy()
+                ),
+                lower_index=index,
+                upper_index=index,
+                interpolation=0.0,
+            )
+        if clamped_time <= self.time[0]:
+            lower = upper = 0
+            amount = 0.0
+        elif clamped_time >= self.time[-1]:
+            lower = upper = len(self.time) - 1
+            amount = 0.0
+        else:
+            upper = int(np.searchsorted(self.time, clamped_time, side="right"))
+            lower = upper - 1
+            amount = float(
+                (clamped_time - self.time[lower])
+                / (self.time[upper] - self.time[lower])
+            )
+            if amount <= 1e-12:
+                upper = lower
+                amount = 0.0
+            elif 1.0 - amount <= 1e-12:
+                lower = upper
+                amount = 0.0
+
+        def interpolate(values: NDArray[np.float64]) -> NDArray[np.float64]:
+            if lower == upper:
+                return values[lower].copy()
+            return ((1.0 - amount) * values[lower] + amount * values[upper]).copy()
+
+        q = interpolate(self.q)
+        qd = interpolate(self.qd)
+        root_pos = None if self.root_pos is None else interpolate(self.root_pos)
+        root_quat = None
+        if self.root_quat is not None:
+            root_quat = (
+                self.root_quat[lower].copy()
+                if lower == upper
+                else _slerp_pair(self.root_quat[lower], self.root_quat[upper], amount)
+            )
+        return ReferenceSample(
+            time=clamped_time,
+            phase=clamped_time / self.duration,
+            q=q,
+            qd=qd,
+            root_pos=root_pos,
+            root_quat=root_quat,
+            lower_index=lower,
+            upper_index=upper,
+            interpolation=amount,
+        )
+
     def resample(self, control_dt: float) -> "ReferenceTrajectory":
         """Resample onto exact ``k * control_dt`` timestamps using SLERP for orientation."""
         if not np.isfinite(control_dt) or control_dt <= 0:
@@ -146,14 +275,88 @@ class ReferenceTrajectory:
         root_quat = None
         if self.root_quat is not None:
             root_quat = slerp_series(self.time, self.root_quat, target_time)
-        edge_order = 2 if len(target_time) >= 3 else 1
-        qd = np.gradient(q, target_time, axis=0, edge_order=edge_order)
+        qd = np.zeros_like(q)
+        qd[1:-1] = (q[2:] - q[:-2]) / (2.0 * control_dt)
+        qd[0] = (q[1] - q[0]) / control_dt
+        qd[-1] = (q[-1] - q[-2]) / control_dt
         metadata = dict(self.source_metadata)
         metadata["resampled_from_samples"] = len(self.time)
         return ReferenceTrajectory(
             time=target_time,
             q=q,
             qd=qd,
+            root_pos=root_pos,
+            root_quat=root_quat,
+            motion_id=self.motion_id,
+            original_fps=self.original_fps,
+            source_path=self.source_path,
+            joint_names=self.joint_names,
+            source_metadata=metadata,
+        )
+
+    def with_stationary_terminal_velocity(self) -> "ReferenceTrajectory":
+        """Return a copy whose final joint velocity is exactly zero.
+
+        Reference consumers clamp to the final sample after a demonstration
+        ends.  A finite-difference endpoint velocity is inappropriate during
+        that hold: the target pose is stationary, so its target velocity must
+        be stationary as well.
+        """
+        qd = self.qd.copy()
+        qd[-1] = 0.0
+        metadata = dict(self.source_metadata)
+        metadata["stationary_terminal_velocity"] = True
+        return ReferenceTrajectory(
+            time=self.time,
+            q=self.q,
+            qd=qd,
+            root_pos=self.root_pos,
+            root_quat=self.root_quat,
+            motion_id=self.motion_id,
+            original_fps=self.original_fps,
+            source_path=self.source_path,
+            joint_names=self.joint_names,
+            source_metadata=metadata,
+        )
+
+    def align_first_root_pose(
+        self, target_position: object, target_quaternion: object
+    ) -> "ReferenceTrajectory":
+        """Rigidly align the root trajectory's first pose to a target pose.
+
+        Joint motion is left untouched. Translation differences and one fixed
+        world-frame quaternion offset are applied to every root sample.
+        """
+        if self.root_pos is None or self.root_quat is None:
+            raise ValueError("root alignment requires root position and orientation")
+        position = np.asarray(target_position, dtype=np.float64)
+        quaternion = np.asarray(target_quaternion, dtype=np.float64)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise ValueError("target_position must be finite with shape (3,)")
+        if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+            raise ValueError("target_quaternion must be finite with shape (4,)")
+        norm = np.linalg.norm(quaternion)
+        if norm < 1e-12:
+            raise ValueError("target_quaternion must be nonzero")
+        quaternion = quaternion / norm
+        first_inverse = self.root_quat[0] * np.array([1.0, -1.0, -1.0, -1.0])
+        offset = _quaternion_multiply(quaternion, first_inverse)
+        root_quat = np.stack(
+            [_quaternion_multiply(offset, value) for value in self.root_quat]
+        )
+        root_pos = position + (self.root_pos - self.root_pos[0])
+        metadata = dict(self.source_metadata)
+        metadata.update(
+            {
+                "root_aligned_to_fallen": True,
+                "root_alignment_target_position": position.tolist(),
+                "root_alignment_target_quaternion": quaternion.tolist(),
+            }
+        )
+        return ReferenceTrajectory(
+            time=self.time,
+            q=self.q,
+            qd=self.qd,
             root_pos=root_pos,
             root_quat=root_quat,
             motion_id=self.motion_id,
@@ -210,4 +413,3 @@ class ReferenceTrajectory:
                 joint_names=tuple(metadata["joint_names"]),
                 source_metadata=source_metadata,
             )
-

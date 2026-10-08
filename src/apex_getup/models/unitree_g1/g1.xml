@@ -7,6 +7,26 @@
     <default class="g1">
       <site rgba="1 0 0 1" size="0.01" group="5"/>
       <joint armature="0.01" frictionloss="0.3"/>
+      <!-- Actuator definitions from the official stand-up implementation. -->
+      <position kp="500" dampratio="1" inheritrange="1"/>
+      <default class="hip">
+        <position kp="150" kv="4" dampratio=""/>
+      </default>
+      <default class="knee">
+        <position kp="200" kv="6" dampratio=""/>
+      </default>
+      <default class="ankle">
+        <position kp="200" kv="2" dampratio=""/>
+      </default>
+      <default class="shoulder">
+        <position kp="100" kv="4" dampratio=""/>
+      </default>
+      <default class="elbow">
+        <position kp="100" kv="4" dampratio=""/>
+      </default>
+      <default class="waist">
+        <position kp="100" kv="4" dampratio=""/>
+      </default>
       <default class="visual">
         <geom group="2" type="mesh" contype="0" conaffinity="0" density="0" material="metal"/>
       </default>
@@ -300,39 +320,39 @@
   </worldbody>
 
   <actuator>
-    <motor class="g1" name="left_hip_pitch_joint" joint="left_hip_pitch_joint"/>
-    <motor class="g1" name="left_hip_roll_joint" joint="left_hip_roll_joint"/>
-    <motor class="g1" name="left_hip_yaw_joint" joint="left_hip_yaw_joint"/>
-    <motor class="g1" name="left_knee_joint" joint="left_knee_joint"/>
-    <motor class="g1" name="left_ankle_pitch_joint" joint="left_ankle_pitch_joint"/>
-    <motor class="g1" name="left_ankle_roll_joint" joint="left_ankle_roll_joint"/>
+    <position class="hip" name="left_hip_pitch_joint" joint="left_hip_pitch_joint"/>
+    <position class="hip" name="left_hip_roll_joint" joint="left_hip_roll_joint"/>
+    <position class="hip" name="left_hip_yaw_joint" joint="left_hip_yaw_joint"/>
+    <position class="knee" name="left_knee_joint" joint="left_knee_joint"/>
+    <position class="ankle" name="left_ankle_pitch_joint" joint="left_ankle_pitch_joint"/>
+    <position class="ankle" name="left_ankle_roll_joint" joint="left_ankle_roll_joint"/>
 
-    <motor class="g1" name="right_hip_pitch_joint" joint="right_hip_pitch_joint"/>
-    <motor class="g1" name="right_hip_roll_joint" joint="right_hip_roll_joint"/>
-    <motor class="g1" name="right_hip_yaw_joint" joint="right_hip_yaw_joint"/>
-    <motor class="g1" name="right_knee_joint" joint="right_knee_joint"/>
-    <motor class="g1" name="right_ankle_pitch_joint" joint="right_ankle_pitch_joint"/>
-    <motor class="g1" name="right_ankle_roll_joint" joint="right_ankle_roll_joint"/>
+    <position class="hip" name="right_hip_pitch_joint" joint="right_hip_pitch_joint"/>
+    <position class="hip" name="right_hip_roll_joint" joint="right_hip_roll_joint"/>
+    <position class="hip" name="right_hip_yaw_joint" joint="right_hip_yaw_joint"/>
+    <position class="knee" name="right_knee_joint" joint="right_knee_joint"/>
+    <position class="ankle" name="right_ankle_pitch_joint" joint="right_ankle_pitch_joint"/>
+    <position class="ankle" name="right_ankle_roll_joint" joint="right_ankle_roll_joint"/>
 
-    <motor class="g1" name="waist_yaw_joint" joint="waist_yaw_joint"/>
-    <motor class="g1" name="waist_roll_joint" joint="waist_roll_joint"/>
-    <motor class="g1" name="waist_pitch_joint" joint="waist_pitch_joint"/>
+    <position class="waist" name="waist_yaw_joint" joint="waist_yaw_joint"/>
+    <position class="waist" name="waist_roll_joint" joint="waist_roll_joint"/>
+    <position class="waist" name="waist_pitch_joint" joint="waist_pitch_joint"/>
 
-    <motor class="g1" name="left_shoulder_pitch_joint" joint="left_shoulder_pitch_joint"/>
-    <motor class="g1" name="left_shoulder_roll_joint" joint="left_shoulder_roll_joint"/>
-    <motor class="g1" name="left_shoulder_yaw_joint" joint="left_shoulder_yaw_joint"/>
-    <motor class="g1" name="left_elbow_joint" joint="left_elbow_joint"/>
-    <motor class="g1" name="left_wrist_roll_joint" joint="left_wrist_roll_joint"/>
-    <motor class="g1" name="left_wrist_pitch_joint" joint="left_wrist_pitch_joint"/>
-    <motor class="g1" name="left_wrist_yaw_joint" joint="left_wrist_yaw_joint"/>
+    <position class="shoulder" name="left_shoulder_pitch_joint" joint="left_shoulder_pitch_joint"/>
+    <position class="shoulder" name="left_shoulder_roll_joint" joint="left_shoulder_roll_joint"/>
+    <position class="shoulder" name="left_shoulder_yaw_joint" joint="left_shoulder_yaw_joint"/>
+    <position class="elbow" name="left_elbow_joint" joint="left_elbow_joint"/>
+    <position class="elbow" name="left_wrist_roll_joint" joint="left_wrist_roll_joint"/>
+    <position class="elbow" name="left_wrist_pitch_joint" joint="left_wrist_pitch_joint"/>
+    <position class="elbow" name="left_wrist_yaw_joint" joint="left_wrist_yaw_joint"/>
 
-    <motor class="g1" name="right_shoulder_pitch_joint" joint="right_shoulder_pitch_joint"/>
-    <motor class="g1" name="right_shoulder_roll_joint" joint="right_shoulder_roll_joint"/>
-    <motor class="g1" name="right_shoulder_yaw_joint" joint="right_shoulder_yaw_joint"/>
-    <motor class="g1" name="right_elbow_joint" joint="right_elbow_joint"/>
-    <motor class="g1" name="right_wrist_roll_joint" joint="right_wrist_roll_joint"/>
-    <motor class="g1" name="right_wrist_pitch_joint" joint="right_wrist_pitch_joint"/>
-    <motor class="g1" name="right_wrist_yaw_joint" joint="right_wrist_yaw_joint"/>
+    <position class="shoulder" name="right_shoulder_pitch_joint" joint="right_shoulder_pitch_joint"/>
+    <position class="shoulder" name="right_shoulder_roll_joint" joint="right_shoulder_roll_joint"/>
+    <position class="shoulder" name="right_shoulder_yaw_joint" joint="right_shoulder_yaw_joint"/>
+    <position class="elbow" name="right_elbow_joint" joint="right_elbow_joint"/>
+    <position class="elbow" name="right_wrist_roll_joint" joint="right_wrist_roll_joint"/>
+    <position class="elbow" name="right_wrist_pitch_joint" joint="right_wrist_pitch_joint"/>
+    <position class="elbow" name="right_wrist_yaw_joint" joint="right_wrist_yaw_joint"/>
   </actuator>
 
   <sensor>
@@ -343,7 +363,17 @@
   </sensor>
 
   <keyframe>
-    <key name="stand" qpos="0 0 0.79 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2 0.2 0 1.28 0 0 0 0.2 -0.2 0 1.28 0 0 0"
+    <key name="stand2"
+      qpos="0.00226222 -0.250222 0.79 0.7071 0 0 -0.7071 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2 0.2 0 1.28 0 0 0 0.2 -0.2 0 1.28 0 0 0"
       ctrl="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2 0.2 0 1.28 0 0 0 0.2 -0.2 0 1.28 0 0 0"/>
+    <!-- Trajectory-specific standing target from the official implementation. -->
+    <key name="stand" time="0"
+      qpos="0.00226222 -0.290222 0.781925 0.682184 -0.0656976 -0.0575383 -0.725946 0.20302 0.121914 0.190822 0.207853 -0.215792 -0.079799 0.238916 -0.0464472 -0.379714 0.167455 -0.218995 0.00507163 0.0262345 -0.000285643 0.0898954 -0.0851167 0.251226 -0.497848 1.26347 0.122935 -0.0364252 0.00667602 0.013406 -0.200088 -0.104375 1.21322 -0.290172 -0.102435 0.289143"
+      qvel="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+      ctrl="0.197864 0.116832 0.192617 0.206504 -0.200237 -0.0738933 0.236517 -0.0507923 -0.379646 0.170787 -0.19343 0.00167606 -0.0487945 0 0.0884 -0.0885343 0.253788 -0.497 1.26249 0.122925 -0.0366758 0.00679393 0.0108687 -0.203036 -0.105 1.21182 -0.290109 -0.102781 0.28912"/>
+    <!-- Calibrated against BONES stand_up_lying_R_002__A475 frame zero.
+         It is used only as an optional root-alignment target; the reference
+         joint positions remain the demonstration's own joint positions. -->
+    <key name="fallen" qpos="-0.00277534 0.0709251 0.0632548 0.518914 -0.484274 -0.481011 -0.514621 -0.200266 0.28679 0.405629 0.260045 0.480934 -0.2618 -0.238183 -0.343178 -0.443819 0.373268 0.364833 0.111274 -0.0211004 -0.0620393 -0.0405421 0.160558 0.459119 -0.430346 1.2153 0.302895 0.201774 0.0309226 0.155218 -0.327606 0.134513 1.31741 -0.931414 0.0660631 0.200301"/>
   </keyframe>
 </mujoco>

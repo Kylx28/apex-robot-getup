@@ -65,6 +65,7 @@ class G1EnvConfig:
     """
 
     model_path: Path | None = None
+    actuator_mode: str = "torque_pd"
     simulation_timestep: float = 0.002
     control_frequency: float = 50.0
     # Selected by the bounded Milestone 2.5 replay sweep. The sweep's historical
@@ -90,6 +91,8 @@ class G1EnvConfig:
         return int(rounded)
 
     def validate(self) -> None:
+        if self.actuator_mode not in {"torque_pd", "native_position"}:
+            raise ValueError("actuator_mode must be torque_pd or native_position")
         if not np.isfinite(self.simulation_timestep) or self.simulation_timestep <= 0:
             raise ValueError("simulation_timestep must be positive and finite")
         if not np.isfinite(self.control_frequency) or self.control_frequency <= 0:

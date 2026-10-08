@@ -32,6 +32,16 @@ class InitialState:
 
 
 @dataclass(frozen=True)
+class KeyframePose:
+    """Validated pose and actuator targets from a named MuJoCo keyframe."""
+
+    joint_positions: NDArray[np.float64]
+    root_position: NDArray[np.float64]
+    root_quaternion: NDArray[np.float64]
+    control_targets: NDArray[np.float64]
+
+
+@dataclass(frozen=True)
 class StepResult:
     state: RobotState
     terminated: bool
@@ -51,10 +61,11 @@ def _array(value: ArrayLike, shape: tuple[int, ...], name: str) -> NDArray[np.fl
 
 
 class G1Env:
-    """G1 simulation with normalized joint targets and an explicit PD loop.
+    """G1 simulation with normalized joint-position targets.
 
-    This is intentionally not tied to Gymnasium. A later RL adapter can wrap
-    the small ``reset``/``step`` API without coupling simulation to an RL stack.
+    ``native_position`` uses MuJoCo position actuators, matching the official
+    stand-up implementation. ``torque_pd`` retains the original explicit
+    Python PD loop for ablations.
     """
 
     action_size = NUM_ACTUATORS
@@ -100,6 +111,7 @@ class G1Env:
         self._right_foot_body_id = self._body_id("right_ankle_roll_link")
 
         self.kp, self.kd, self.nominal_pose, configured_limits = self.config.arrays()
+        self._configure_actuators()
         self.action_center, self.action_scale = action_parameters_from_joint_limits(
             self.joint_limits
         )
@@ -116,6 +128,29 @@ class G1Env:
         self.last_action = np.zeros(NUM_ACTUATORS)
         self.last_joint_target = self.nominal_pose.copy()
         self.last_torque = np.zeros(NUM_ACTUATORS)
+
+    def _configure_actuators(self) -> None:
+        """Configure the compiled position servos or recover direct motors."""
+        if self.config.actuator_mode == "native_position":
+            # A MuJoCo position actuator has force = kp * (ctrl - q) - kd * qd.
+            # Configure these arrays explicitly so YAML gain ablations keep the
+            # native solver path without requiring another XML model.
+            self.model.actuator_gainprm[:, 0] = self.kp
+            self.model.actuator_biasprm[:, :] = 0.0
+            self.model.actuator_biasprm[:, 1] = -self.kp
+            self.model.actuator_biasprm[:, 2] = -self.kd
+            self.model.actuator_ctrllimited[:] = True
+            self.model.actuator_ctrlrange[:] = self.joint_limits
+            return
+
+        # The vendored XML now contains the official position actuators. For
+        # legacy explicit-PD experiments, turn their affine position feedback
+        # into unit-gain direct motors. Joint actuator-force ranges still cap
+        # the resulting generalized force.
+        self.model.actuator_gainprm[:, :] = 0.0
+        self.model.actuator_gainprm[:, 0] = 1.0
+        self.model.actuator_biasprm[:, :] = 0.0
+        self.model.actuator_ctrllimited[:] = False
 
     @property
     def rng(self) -> np.random.Generator:
@@ -134,6 +169,85 @@ class G1Env:
         if body_id < 0:
             raise ValueError(f"model has no body named {name!r}")
         return body_id
+
+    def keyframe_pose(self, name: str) -> KeyframePose:
+        """Load a named XML keyframe and validate its root and actuated pose."""
+        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
+        if key_id < 0:
+            raise ValueError(f"model has no keyframe named {name!r}")
+        qpos = np.asarray(self.model.key_qpos[key_id], dtype=np.float64)
+        control_targets = np.asarray(
+            self.model.key_ctrl[key_id], dtype=np.float64
+        ).copy()
+        if qpos.shape != (self.model.nq,) or not np.all(np.isfinite(qpos)):
+            raise ValueError(f"keyframe {name!r} has malformed qpos data")
+        joint_positions = qpos[self._qpos_indices].copy()
+        root_position = qpos[
+            self._root_qpos_index : self._root_qpos_index + 3
+        ].copy()
+        root_quaternion = qpos[
+            self._root_qpos_index + 3 : self._root_qpos_index + 7
+        ].copy()
+        if (
+            joint_positions.shape != (NUM_ACTUATORS,)
+            or root_position.shape != (3,)
+            or root_quaternion.shape != (4,)
+            or control_targets.shape != (NUM_ACTUATORS,)
+            or not np.all(np.isfinite(control_targets))
+            or np.linalg.norm(root_quaternion) < 1e-12
+            or np.any(joint_positions < self.joint_limits[:, 0])
+            or np.any(joint_positions > self.joint_limits[:, 1])
+        ):
+            raise ValueError(f"keyframe {name!r} is malformed for the G1 model")
+        return KeyframePose(
+            joint_positions=joint_positions,
+            root_position=root_position,
+            root_quaternion=root_quaternion / np.linalg.norm(root_quaternion),
+            control_targets=control_targets,
+        )
+
+    def generalized_state(
+        self,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return MuJoCo-order generalized position and velocity copies."""
+        return self.data.qpos.copy(), self.data.qvel.copy()
+
+    def pack_generalized_position(
+        self,
+        root_position: ArrayLike,
+        root_quaternion: ArrayLike,
+        joint_positions: ArrayLike,
+    ) -> NDArray[np.float64]:
+        """Pack root and canonical actuated joints into MuJoCo qpos order."""
+        result = np.zeros(self.model.nq, dtype=np.float64)
+        result[self._root_qpos_index : self._root_qpos_index + 3] = _array(
+            root_position, (3,), "root_position"
+        )
+        quaternion = _array(root_quaternion, (4,), "root_quaternion")
+        norm = np.linalg.norm(quaternion)
+        if norm < 1e-12:
+            raise ValueError("root_quaternion must have nonzero norm")
+        result[self._root_qpos_index + 3 : self._root_qpos_index + 7] = (
+            quaternion / norm
+        )
+        result[self._qpos_indices] = _array(
+            joint_positions, (NUM_ACTUATORS,), "joint_positions"
+        )
+        return result
+
+    def differentiate_generalized_position(
+        self, first: ArrayLike, second: ArrayLike, timestep: float
+    ) -> NDArray[np.float64]:
+        """Return MuJoCo qvel taking ``first`` to ``second`` over ``timestep``."""
+        if not np.isfinite(timestep) or timestep <= 0:
+            raise ValueError("timestep must be positive and finite")
+        first_array = _array(first, (self.model.nq,), "first qpos")
+        second_array = _array(second, (self.model.nq,), "second qpos")
+        velocity = np.empty(self.model.nv, dtype=np.float64)
+        mujoco.mj_differentiatePos(
+            self.model, velocity, timestep, first_array, second_array
+        )
+        return velocity
 
     def reset(
         self,
@@ -201,7 +315,11 @@ class G1Env:
         self.data.qvel[root_qvel + 3 : root_qvel + 6] = (
             root_rotation.reshape(3, 3).T @ root_angular_velocity
         )
-        self.data.ctrl[:] = 0.0
+        self.data.ctrl[:] = (
+            joint_positions
+            if self.config.actuator_mode == "native_position"
+            else 0.0
+        )
         mujoco.mj_forward(self.model, self.data)
 
         self._control_steps = 0
@@ -212,21 +330,66 @@ class G1Env:
         return self.get_state()
 
     def step(self, action: ArrayLike) -> StepResult:
-        """Advance one control interval while recomputing PD torque each physics step."""
+        """Advance from a normalized action; the vanilla PPO path uses this API."""
         clipped_action, target = self.action_to_joint_target(action)
+        return self._step_joint_target(
+            target,
+            executed_action=clipped_action,
+            target_was_clipped=bool(
+                np.any(clipped_action != np.asarray(action, dtype=np.float64))
+            ),
+        )
+
+    def step_joint_target(self, joint_target: ArrayLike) -> StepResult:
+        """Advance from a physical joint-position target in radians.
+
+        This is the source-of-truth control path for physical residual policies.
+        Limits are applied to the composed physical target, and ``last_action``
+        remains its normalized equivalent for existing observations and logging.
+        """
+        requested_target = _array(
+            joint_target, (NUM_ACTUATORS,), "joint_target"
+        )
+        target = np.clip(
+            requested_target, self.joint_limits[:, 0], self.joint_limits[:, 1]
+        )
+        executed_action, _ = self.joint_target_to_action(target)
+        return self._step_joint_target(
+            target,
+            executed_action=executed_action,
+            target_was_clipped=bool(np.any(target != requested_target)),
+        )
+
+    def _step_joint_target(
+        self,
+        target: NDArray[np.float64],
+        *,
+        executed_action: NDArray[np.float64],
+        target_was_clipped: bool,
+    ) -> StepResult:
+        """Integrate one control interval for an already-clipped physical target."""
         torque_saturation_count = 0
         torque_abs_sum = np.zeros(NUM_ACTUATORS)
         torque_abs_max = np.zeros(NUM_ACTUATORS)
         torque_over_80_count = np.zeros(NUM_ACTUATORS, dtype=np.int64)
         for _ in range(self.config.physics_steps_per_control_step):
-            torque = pd_torque(
-                target,
-                self.data.qpos[self._qpos_indices],
-                self.data.qvel[self._qvel_indices],
-                self.kp,
-                self.kd,
-                self.torque_limits,
-            )
+            if self.config.actuator_mode == "native_position":
+                self.data.ctrl[:] = target
+                mujoco.mj_step(self.model, self.data)
+                # qfrc_actuator contains the force after MuJoCo applies the
+                # joint-level actuatorfrcrange limits used by the official XML.
+                torque = self.data.qfrc_actuator[self._qvel_indices].copy()
+            else:
+                torque = pd_torque(
+                    target,
+                    self.data.qpos[self._qpos_indices],
+                    self.data.qvel[self._qvel_indices],
+                    self.kp,
+                    self.kd,
+                    self.torque_limits,
+                )
+                self.data.ctrl[:] = torque
+                mujoco.mj_step(self.model, self.data)
             torque_saturation_count += int(
                 np.count_nonzero(np.isclose(np.abs(torque), self.torque_limits, atol=1e-8))
             )
@@ -234,13 +397,11 @@ class G1Env:
             torque_abs_sum += absolute_torque
             torque_abs_max = np.maximum(torque_abs_max, absolute_torque)
             torque_over_80_count += absolute_torque >= 0.8 * self.torque_limits
-            self.data.ctrl[:] = torque
-            mujoco.mj_step(self.model, self.data)
             self._assert_finite()
 
         self._control_steps += 1
-        self.last_action = clipped_action
-        self.last_joint_target = target
+        self.last_action = executed_action.copy()
+        self.last_joint_target = target.copy()
         self.last_torque = torque
         truncated = self.data.time + 1e-12 >= self.config.episode_duration
         state = self.get_state()
@@ -258,7 +419,9 @@ class G1Env:
                 / self.config.physics_steps_per_control_step,
                 "torque_saturation_fraction": torque_saturation_count
                 / (NUM_ACTUATORS * self.config.physics_steps_per_control_step),
-                "action_was_clipped": bool(np.any(clipped_action != np.asarray(action))),
+                "action_was_clipped": target_was_clipped,
+                "physical_joint_target_was_clipped": target_was_clipped,
+                "actuator_mode": self.config.actuator_mode,
             },
         )
 
@@ -313,7 +476,9 @@ class G1Env:
             if not np.isfinite(time) or time < 0:
                 raise ValueError("time must be non-negative and finite")
             self.data.time = float(time)
-        self.data.ctrl[:] = 0.0
+        self.data.ctrl[:] = (
+            q if self.config.actuator_mode == "native_position" else 0.0
+        )
         mujoco.mj_forward(self.model, self.data)
         self._assert_finite()
         return self.get_state()
@@ -357,6 +522,31 @@ class G1Env:
     def foot_contacts(self) -> tuple[bool, bool]:
         state = self.get_state()
         return state.left_foot_contact, state.right_foot_contact
+
+    def foot_planar_velocities(
+        self,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return left/right foot-origin world-frame ``xy`` velocities."""
+        velocities: list[NDArray[np.float64]] = []
+        for body_id in (self._left_foot_body_id, self._right_foot_body_id):
+            spatial_velocity = np.empty(6, dtype=np.float64)
+            mujoco.mj_objectVelocity(
+                self.model,
+                self.data,
+                mujoco.mjtObj.mjOBJ_BODY,
+                body_id,
+                spatial_velocity,
+                0,
+            )
+            velocities.append(spatial_velocity[3:5].copy())
+        return velocities[0], velocities[1]
+
+    def foot_origin_heights(self) -> tuple[float, float]:
+        """Return left/right foot body-origin world heights in metres."""
+        return (
+            float(self.data.xpos[self._left_foot_body_id, 2]),
+            float(self.data.xpos[self._right_foot_body_id, 2]),
+        )
 
     def non_foot_body_contacts(self) -> tuple[Contact, ...]:
         return tuple(

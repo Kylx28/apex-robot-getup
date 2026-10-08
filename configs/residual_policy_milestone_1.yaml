@@ -1,0 +1,99 @@
+# Success-oriented frame-zero residual PPO ablation.
+#
+# This keeps the official rigid-ground timing, reference, actuator, observation,
+# residual action, and SB3 settings while broadening and strengthening the
+# standing-height signal and reducing rewards that can be earned while lying.
+run:
+  seed: 1
+  total_steps: 70000000
+  output_dir: artifacts/training/stage-b-frame0-success-reward-seed1-70M-interpolate
+  checkpoint_frequency: 500000
+  evaluation_frequency: 500000
+  smoothing_window: 10
+
+training:
+  num_envs: 20
+
+control:
+  mode: residual
+  residual_scale: 0.25
+
+task:
+  demonstration_path: datasets/stand_up_lying_R_002__A475_new.csv
+  episode_duration: null
+  reference_hold_duration: 2.0
+  simulation_timestep: 0.002
+  control_frequency: 62.5
+  initial_velocity_mode: reference
+  interpolate_reference: true
+  align_reference_root_to_fallen: true
+  controller:
+    actuator_mode: native_position
+    kp: [150, 150, 150, 200, 200, 200, 150, 150, 150, 200, 200, 200,
+         100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+         100, 100, 100, 100, 100, 100, 100]
+    kd: [4, 4, 4, 6, 2, 2, 4, 4, 4, 6, 2, 2,
+         4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+         4, 4, 4, 4, 4, 4, 4]
+  observation:
+    mode: paper_reference
+  reset_perturbation:
+    joint_position_std: 0.0
+    joint_velocity_std: 0.0
+    root_orientation_std: 0.0
+    root_linear_velocity_std: 0.0
+    root_angular_velocity_std: 0.0
+  reward:
+    # Success-oriented ablation from the Table-I baseline.
+    pose_tracking_weight: 1.0
+    velocity_tracking_weight: 0.3
+    root_xy_tracking_weight: 0.2
+    pelvis_height_tracking_weight: 1.0
+    orientation_tracking_weight: 0.5
+    standing_pose_weight: 0.5
+    uprightness_weight: 2.0
+    standing_height_weight: 4.0
+    foot_slip_penalty_weight: 0.15
+    action_penalty_weight: 0.002
+    action_smoothness_penalty_weight: 0.005
+    pose_tracking_scale: 4.0
+    velocity_tracking_scale: 0.03
+    root_xy_tracking_scale: 2.0
+    pelvis_height_tracking_scale: 10.0
+    orientation_tracking_scale: 1.0
+    standing_pose_scale: 5.0
+    # Broader than the paper's 20.0 so low poses receive useful lift signal.
+    standing_height_scale: 4.0
+    standing_phase_threshold: 0.65
+  success:
+    pelvis_height: 0.65
+    torso_uprightness: 0.85
+    maximum_linear_speed: 0.5
+    maximum_angular_speed: 1.0
+    hold_duration: 1.5
+    terminate_on_success: false
+
+ppo:
+  backend: sb3
+  learning_rate: 0.0001
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_range: 0.2
+  entropy_coefficient: 0.001
+  value_coefficient: 0.5
+  maximum_gradient_norm: 0.5
+  rollout_steps: 2048
+  minibatch_size: 2048
+  update_epochs: 5
+  target_kl: null
+  actor_hidden_dimensions: [512, 256, 128]
+  critic_hidden_dimensions: [512, 256, 128]
+  initial_action_std: 1.0
+  device: cpu
+
+normalization:
+  normalize_observations: true
+  normalize_rewards: true
+  epsilon: 1.0e-8
+  observation_clip: 10.0
+  reward_clip: 10.0
