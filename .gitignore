@@ -6,3 +6,5 @@ __pycache__/
 artifacts/
 datasets/bones-seed/
 datasets/processed/
+
+/tests/

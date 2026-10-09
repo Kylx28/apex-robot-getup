@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+import math
 from pathlib import Path
 from typing import Any, Mapping, TypeVar
 
 import yaml
 
-from apex_getup.apex import PriorScheduleConfig, ResidualControlConfig
+from apex_getup.apex import PriorScheduleConfig
 from apex_getup.env.config import JOINT_NAMES
 from apex_getup.rl import NormalizationConfig, PPOConfig
 from apex_getup.task import (
     GetUpTaskConfig,
     ObservationConfig,
-    PDControllerConfig,
+    PositionControllerConfig,
     ResetPerturbationConfig,
     RewardConfig,
     SuccessConfig,
@@ -43,20 +44,19 @@ def _strict_dataclass_kwargs(
     return result
 
 
-def _pd_controller(value: object) -> PDControllerConfig:
+def _position_controller(value: object) -> PositionControllerConfig:
     """Parse scalar/vector gains or an explicit canonical joint-gain map."""
     values = _mapping(value, "task.controller")
-    unknown = set(values) - {"actuator_mode", "kp", "kd", "joint_gains"}
+    unknown = set(values) - {"kp", "kd", "joint_gains"}
     if unknown:
         raise ValueError(f"unknown task.controller fields: {sorted(unknown)}")
     if "joint_gains" not in values:
         for gain in ("kp", "kd"):
             if isinstance(values.get(gain), list):
                 values[gain] = tuple(values[gain])
-        return PDControllerConfig(**values)
+        return PositionControllerConfig(**values)
     if "kp" in values or "kd" in values:
         raise ValueError("joint_gains cannot be combined with controller kp or kd")
-    actuator_mode = str(values.get("actuator_mode", "torque_pd"))
     joint_gains = _mapping(values["joint_gains"], "task.controller.joint_gains")
     missing = set(JOINT_NAMES) - set(joint_gains)
     extra = set(joint_gains) - set(JOINT_NAMES)
@@ -77,9 +77,7 @@ def _pd_controller(value: object) -> PDControllerConfig:
             raise ValueError(f"{joint_name} must define exactly kp and kd")
         kp.append(float(pair["kp"]))
         kd.append(float(pair["kd"]))
-    return PDControllerConfig(
-        actuator_mode=actuator_mode, kp=tuple(kp), kd=tuple(kd)
-    )
+    return PositionControllerConfig(kp=tuple(kp), kd=tuple(kd))
 
 
 @dataclass(frozen=True)
@@ -118,7 +116,8 @@ class TrainingRunConfig:
             raise ValueError("num_envs must be positive")
         if self.control_mode not in {"decaying-prior", "residual"}:
             raise ValueError("control mode must be decaying-prior or residual")
-        ResidualControlConfig(self.residual_scale).validate()
+        if not math.isfinite(self.residual_scale) or self.residual_scale < 0:
+            raise ValueError("residual_scale must be non-negative and finite")
         self.task.validate()
         self.ppo.validate()
         self.normalization.validate()
@@ -178,7 +177,7 @@ class TrainingRunConfig:
                 )
                 task_values[key] = nested_type(**nested_values)
         if "controller" in task_values:
-            task_values["controller"] = _pd_controller(task_values["controller"])
+            task_values["controller"] = _position_controller(task_values["controller"])
 
         ppo_values = _strict_dataclass_kwargs(root.get("ppo"), PPOConfig, "ppo")
         for key in ("actor_hidden_dimensions", "critic_hidden_dimensions"):

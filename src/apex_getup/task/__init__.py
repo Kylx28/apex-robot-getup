@@ -3,7 +3,7 @@
 from apex_getup.task.config import (
     GetUpTaskConfig,
     ObservationConfig,
-    PDControllerConfig,
+    PositionControllerConfig,
     ResetPerturbationConfig,
     RewardConfig,
     SuccessConfig,
@@ -43,7 +43,7 @@ __all__ = [
     "RESIDUAL_REFERENCE_OBSERVATION_SIZE",
     "STATE_ONLY_OBSERVATION_SIZE",
     "ObservationConfig",
-    "PDControllerConfig",
+    "PositionControllerConfig",
     "RewardComponents",
     "RewardConfig",
     "ResetPerturbationConfig",

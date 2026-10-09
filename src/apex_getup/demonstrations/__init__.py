@@ -7,6 +7,7 @@ from apex_getup.demonstrations.bones_loader import (
     resolve_motion_path,
 )
 from apex_getup.demonstrations.paths import BonesDatasetPaths, discover_bones_dataset
+from apex_getup.demonstrations.reference import DemonstrationActionPrior
 from apex_getup.demonstrations.trajectory import (
     ReferenceSample,
     ReferenceTrajectory,
@@ -16,6 +17,7 @@ from apex_getup.demonstrations.trajectory import (
 __all__ = [
     "BONES_G1_FPS",
     "BonesDatasetPaths",
+    "DemonstrationActionPrior",
     "ReferenceTrajectory",
     "ReferenceSample",
     "reference_index_for_episode_step",

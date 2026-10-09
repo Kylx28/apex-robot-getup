@@ -5,8 +5,8 @@
 # standing-height signal and reducing rewards that can be earned while lying.
 run:
   seed: 1
-  total_steps: 70000000
-  output_dir: artifacts/training/stage-b-frame0-success-reward-seed1-70M-interpolate
+  total_steps: 30000000
+  output_dir: artifacts/training/prone-frame0-30M-interpolate
   checkpoint_frequency: 500000
   evaluation_frequency: 500000
   smoothing_window: 10
@@ -19,7 +19,7 @@ control:
   residual_scale: 0.25
 
 task:
-  demonstration_path: datasets/stand_up_lying_R_002__A475_new.csv
+  demonstration_path: /home/kyle/projects/apex-robot-getup/datasets/bones-seed/g1/csv/231010/stand_up_lying_stomach_R_002__A475.csv
   episode_duration: null
   reference_hold_duration: 2.0
   simulation_timestep: 0.002
@@ -28,7 +28,6 @@ task:
   interpolate_reference: true
   align_reference_root_to_fallen: true
   controller:
-    actuator_mode: native_position
     kp: [150, 150, 150, 200, 200, 200, 150, 150, 150, 200, 200, 200,
          100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
          100, 100, 100, 100, 100, 100, 100]

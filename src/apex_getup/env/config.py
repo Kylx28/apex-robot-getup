@@ -36,15 +36,6 @@ DEFAULT_NOMINAL_POSE: tuple[float, ...] = (
     0.2, -0.2, 0.0, 1.28, 0.0, 0.0, 0.0,
 )
 
-# Unitree actuator force limits from the Menagerie model, in N m.
-DEFAULT_TORQUE_LIMITS: tuple[float, ...] = (
-    88, 139, 88, 139, 50, 50,
-    88, 139, 88, 139, 50, 50,
-    88, 50, 50,
-    25, 25, 25, 25, 25, 5, 5,
-    25, 25, 25, 25, 25, 5, 5,
-)
-
 
 def _vector(value: float | Sequence[float], name: str) -> NDArray[np.float64]:
     array = np.asarray(value, dtype=np.float64)
@@ -57,7 +48,7 @@ def _vector(value: float | Sequence[float], name: str) -> NDArray[np.float64]:
 
 @dataclass(frozen=True)
 class G1EnvConfig:
-    """Numerical and controller settings.
+    """Numerical and MuJoCo position-servo settings.
 
     Scalar gains are broadcast to all 29 joints; per-joint sequences are also
     accepted. Action centers/scales come from the loaded model's joint limits.
@@ -65,7 +56,6 @@ class G1EnvConfig:
     """
 
     model_path: Path | None = None
-    actuator_mode: str = "torque_pd"
     simulation_timestep: float = 0.002
     control_frequency: float = 50.0
     # Selected by the bounded Milestone 2.5 replay sweep. The sweep's historical
@@ -73,7 +63,6 @@ class G1EnvConfig:
     kp: float | tuple[float, ...] = 60.0
     kd: float | tuple[float, ...] = 3.0
     nominal_joint_pose: tuple[float, ...] = DEFAULT_NOMINAL_POSE
-    torque_limits: tuple[float, ...] = DEFAULT_TORQUE_LIMITS
     episode_duration: float = 10.0
 
     @property
@@ -91,8 +80,6 @@ class G1EnvConfig:
         return int(rounded)
 
     def validate(self) -> None:
-        if self.actuator_mode not in {"torque_pd", "native_position"}:
-            raise ValueError("actuator_mode must be torque_pd or native_position")
         if not np.isfinite(self.simulation_timestep) or self.simulation_timestep <= 0:
             raise ValueError("simulation_timestep must be positive and finite")
         if not np.isfinite(self.control_frequency) or self.control_frequency <= 0:
@@ -104,7 +91,6 @@ class G1EnvConfig:
             ("kp", self.kp),
             ("kd", self.kd),
             ("nominal_joint_pose", self.nominal_joint_pose),
-            ("torque_limits", self.torque_limits),
         ):
             array = _vector(value, name)
             if name != "nominal_joint_pose" and np.any(array < 0):
@@ -115,5 +101,4 @@ class G1EnvConfig:
             _vector(self.kp, "kp"),
             _vector(self.kd, "kd"),
             _vector(self.nominal_joint_pose, "nominal_joint_pose"),
-            _vector(self.torque_limits, "torque_limits"),
         )

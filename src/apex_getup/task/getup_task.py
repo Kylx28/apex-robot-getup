@@ -59,7 +59,6 @@ class GetUpTask:
                 episode_duration=self.config.episode_duration,
                 simulation_timestep=self.config.simulation_timestep,
                 control_frequency=self.config.control_frequency,
-                actuator_mode=self.config.controller.actuator_mode,
                 kp=self.config.controller.kp,
                 kd=self.config.controller.kd,
             ),

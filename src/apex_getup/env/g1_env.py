@@ -14,7 +14,6 @@ from apex_getup.env.control import (
     action_parameters_from_joint_limits,
     action_to_joint_target,
     joint_target_to_action,
-    pd_torque,
 )
 from apex_getup.env.observations import Contact, RobotState, contact_flags, extract_contacts
 
@@ -61,11 +60,10 @@ def _array(value: ArrayLike, shape: tuple[int, ...], name: str) -> NDArray[np.fl
 
 
 class G1Env:
-    """G1 simulation with normalized joint-position targets.
+    """G1 simulation controlled by MuJoCo position actuators.
 
-    ``native_position`` uses MuJoCo position actuators, matching the official
-    stand-up implementation. ``torque_pd`` retains the original explicit
-    Python PD loop for ablations.
+    Policy actions map to physical joint-position targets. MuJoCo applies the
+    configured servo gains and the XML actuator-force limits during integration.
     """
 
     action_size = NUM_ACTUATORS
@@ -110,13 +108,17 @@ class G1Env:
         self._left_foot_body_id = self._body_id("left_ankle_roll_link")
         self._right_foot_body_id = self._body_id("right_ankle_roll_link")
 
-        self.kp, self.kd, self.nominal_pose, configured_limits = self.config.arrays()
+        self.kp, self.kd, self.nominal_pose = self.config.arrays()
         self._configure_actuators()
         self.action_center, self.action_scale = action_parameters_from_joint_limits(
             self.joint_limits
         )
         model_limits = np.max(np.abs(self.model.jnt_actfrcrange[self._joint_ids]), axis=1)
-        self.torque_limits = np.minimum(configured_limits, model_limits)
+        self.torque_limits = model_limits
+        if not np.all(np.isfinite(self.torque_limits)) or np.any(
+            self.torque_limits <= 0.0
+        ):
+            raise ValueError("actuated joints must have finite positive force limits")
         if np.any(self.nominal_pose < self.joint_limits[:, 0]) or np.any(
             self.nominal_pose > self.joint_limits[:, 1]
         ):
@@ -130,27 +132,16 @@ class G1Env:
         self.last_torque = np.zeros(NUM_ACTUATORS)
 
     def _configure_actuators(self) -> None:
-        """Configure the compiled position servos or recover direct motors."""
-        if self.config.actuator_mode == "native_position":
-            # A MuJoCo position actuator has force = kp * (ctrl - q) - kd * qd.
-            # Configure these arrays explicitly so YAML gain ablations keep the
-            # native solver path without requiring another XML model.
-            self.model.actuator_gainprm[:, 0] = self.kp
-            self.model.actuator_biasprm[:, :] = 0.0
-            self.model.actuator_biasprm[:, 1] = -self.kp
-            self.model.actuator_biasprm[:, 2] = -self.kd
-            self.model.actuator_ctrllimited[:] = True
-            self.model.actuator_ctrlrange[:] = self.joint_limits
-            return
-
-        # The vendored XML now contains the official position actuators. For
-        # legacy explicit-PD experiments, turn their affine position feedback
-        # into unit-gain direct motors. Joint actuator-force ranges still cap
-        # the resulting generalized force.
-        self.model.actuator_gainprm[:, :] = 0.0
-        self.model.actuator_gainprm[:, 0] = 1.0
+        """Apply configured gains to the compiled MuJoCo position servos."""
+        # A MuJoCo position actuator has force = kp * (ctrl - q) - kd * qd.
+        # Configure the compiled arrays explicitly so gain ablations do not
+        # require separate XML models.
+        self.model.actuator_gainprm[:, 0] = self.kp
         self.model.actuator_biasprm[:, :] = 0.0
-        self.model.actuator_ctrllimited[:] = False
+        self.model.actuator_biasprm[:, 1] = -self.kp
+        self.model.actuator_biasprm[:, 2] = -self.kd
+        self.model.actuator_ctrllimited[:] = True
+        self.model.actuator_ctrlrange[:] = self.joint_limits
 
     @property
     def rng(self) -> np.random.Generator:
@@ -315,11 +306,7 @@ class G1Env:
         self.data.qvel[root_qvel + 3 : root_qvel + 6] = (
             root_rotation.reshape(3, 3).T @ root_angular_velocity
         )
-        self.data.ctrl[:] = (
-            joint_positions
-            if self.config.actuator_mode == "native_position"
-            else 0.0
-        )
+        self.data.ctrl[:] = joint_positions
         mujoco.mj_forward(self.model, self.data)
 
         self._control_steps = 0
@@ -373,23 +360,11 @@ class G1Env:
         torque_abs_max = np.zeros(NUM_ACTUATORS)
         torque_over_80_count = np.zeros(NUM_ACTUATORS, dtype=np.int64)
         for _ in range(self.config.physics_steps_per_control_step):
-            if self.config.actuator_mode == "native_position":
-                self.data.ctrl[:] = target
-                mujoco.mj_step(self.model, self.data)
-                # qfrc_actuator contains the force after MuJoCo applies the
-                # joint-level actuatorfrcrange limits used by the official XML.
-                torque = self.data.qfrc_actuator[self._qvel_indices].copy()
-            else:
-                torque = pd_torque(
-                    target,
-                    self.data.qpos[self._qpos_indices],
-                    self.data.qvel[self._qvel_indices],
-                    self.kp,
-                    self.kd,
-                    self.torque_limits,
-                )
-                self.data.ctrl[:] = torque
-                mujoco.mj_step(self.model, self.data)
+            self.data.ctrl[:] = target
+            mujoco.mj_step(self.model, self.data)
+            # qfrc_actuator contains the force after MuJoCo applies the
+            # joint-level actuatorfrcrange limits used by the official XML.
+            torque = self.data.qfrc_actuator[self._qvel_indices].copy()
             torque_saturation_count += int(
                 np.count_nonzero(np.isclose(np.abs(torque), self.torque_limits, atol=1e-8))
             )
@@ -421,7 +396,6 @@ class G1Env:
                 / (NUM_ACTUATORS * self.config.physics_steps_per_control_step),
                 "action_was_clipped": target_was_clipped,
                 "physical_joint_target_was_clipped": target_was_clipped,
-                "actuator_mode": self.config.actuator_mode,
             },
         )
 
@@ -476,9 +450,7 @@ class G1Env:
             if not np.isfinite(time) or time < 0:
                 raise ValueError("time must be non-negative and finite")
             self.data.time = float(time)
-        self.data.ctrl[:] = (
-            q if self.config.actuator_mode == "native_position" else 0.0
-        )
+        self.data.ctrl[:] = q
         mujoco.mj_forward(self.model, self.data)
         self._assert_finite()
         return self.get_state()

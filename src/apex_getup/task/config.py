@@ -115,18 +115,13 @@ class ObservationConfig:
 
 
 @dataclass(frozen=True)
-class PDControllerConfig:
-    """Actuator mode and PD gains; vectors follow canonical G1 joint order."""
+class PositionControllerConfig:
+    """MuJoCo position-servo gains in canonical G1 joint order."""
 
-    actuator_mode: str = "torque_pd"
     kp: float | tuple[float, ...] = 60.0
     kd: float | tuple[float, ...] = 3.0
 
     def validate(self) -> None:
-        if self.actuator_mode not in {"torque_pd", "native_position"}:
-            raise ValueError(
-                "controller actuator_mode must be torque_pd or native_position"
-            )
         for name, value in (("kp", self.kp), ("kd", self.kd)):
             array = np.asarray(value, dtype=np.float64)
             if array.ndim == 0:
@@ -154,7 +149,9 @@ class GetUpTaskConfig:
     initial_velocity_mode: str = "auto"
     interpolate_reference: bool = True
     align_reference_root_to_fallen: bool = False
-    controller: PDControllerConfig = field(default_factory=PDControllerConfig)
+    controller: PositionControllerConfig = field(
+        default_factory=PositionControllerConfig
+    )
     reward: RewardConfig = field(default_factory=RewardConfig)
     reset_perturbation: ResetPerturbationConfig = field(
         default_factory=ResetPerturbationConfig

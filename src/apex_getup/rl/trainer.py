@@ -7,12 +7,9 @@ from time import perf_counter
 
 import numpy as np
 
-from apex_getup.apex import (
-    DemonstrationActionPrior,
-    PriorCoefficientSchedule,
-    compose_apex_action,
-    compose_residual_joint_target,
-)
+from apex_getup.apex import PriorCoefficientSchedule, compose_apex_action
+from apex_getup.control import compose_residual_joint_target
+from apex_getup.demonstrations import DemonstrationActionPrior
 from apex_getup.rl.buffer import RolloutBuffer
 from apex_getup.rl.ppo import PPOAgent
 from apex_getup.rl.normalization import VecNormalizer

@@ -1,4 +1,4 @@
-"""Joint target mapping and torque control."""
+"""Normalized action and physical joint-target mappings."""
 
 from __future__ import annotations
 
@@ -41,29 +41,6 @@ def action_to_joint_target(
 # intentionally match the new joint-limit mapping rather than the old nominal
 # pose mapping.
 normalized_action_to_target = action_to_joint_target
-
-
-def pd_torque(
-    target: ArrayLike,
-    position: ArrayLike,
-    velocity: ArrayLike,
-    kp: ArrayLike,
-    kd: ArrayLike,
-    torque_limits: ArrayLike,
-) -> NDArray[np.float64]:
-    """Compute and symmetrically clip joint-space PD torques."""
-    target_array = np.asarray(target, dtype=np.float64)
-    position_array = np.asarray(position, dtype=np.float64)
-    velocity_array = np.asarray(velocity, dtype=np.float64)
-    kp_array = np.asarray(kp, dtype=np.float64)
-    kd_array = np.asarray(kd, dtype=np.float64)
-    limits = np.asarray(torque_limits, dtype=np.float64)
-    if not all(x.shape == target_array.shape for x in (position_array, velocity_array, kp_array, kd_array, limits)):
-        raise ValueError("all PD controller inputs must have the same shape")
-    if not all(np.all(np.isfinite(x)) for x in (target_array, position_array, velocity_array, kp_array, kd_array, limits)):
-        raise ValueError("PD controller inputs must be finite")
-    torque = kp_array * (target_array - position_array) - kd_array * velocity_array
-    return np.clip(torque, -limits, limits)
 
 
 def joint_target_to_action(

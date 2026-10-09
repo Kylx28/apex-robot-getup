@@ -17,13 +17,15 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from apex_getup.apex import (
-    DemonstrationActionPrior,
     FixedCoefficientPriorAdapter,
     PriorCoefficientSchedule,
-    ResidualActionAdapter,
     compose_apex_action,
+)
+from apex_getup.control import (
+    ResidualActionAdapter,
     compose_residual_joint_target,
 )
+from apex_getup.demonstrations import DemonstrationActionPrior
 from apex_getup.rl.config import PPOConfig
 from apex_getup.rl.normalization import NormalizationConfig
 from apex_getup.rl.trainer import EpisodeAccumulator

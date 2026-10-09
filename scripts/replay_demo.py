@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a BONES-SEED G1 motion kinematically or through the environment PD loop."""
+"""Replay a BONES-SEED G1 motion kinematically or through MuJoCo position actuators."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--motion", required=True, help="exact metadata ID or CSV/NPZ path")
     parser.add_argument("--mode", choices=("kinematic", "dynamic"), required=True)
     parser.add_argument("--dataset-root", type=Path, default=None)
-    parser.add_argument("--control-frequency", type=float, default=50.0)
+    parser.add_argument("--control-frequency", type=float, required=True)
     parser.add_argument("--speed", type=float, default=1.0, help="viewer playback speed multiplier")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--max-seconds", type=float, default=None)
