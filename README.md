@@ -94,10 +94,6 @@ python scripts/evaluate_residual_ppo.py \
   --render
 ```
 
-Training outputs, checkpoints, normalization statistics, metrics, and plots are
-stored under `artifacts/`. See [COMMANDS.md](COMMANDS.md) for additional replay,
-ablation, plotting, and testing commands.
-
 ## References
 
 - [APEX: Action Priors Enable Efficient Exploration for Robust Motion Tracking
