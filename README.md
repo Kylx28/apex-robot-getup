@@ -1,4 +1,4 @@
-# APEX Robot Get-Up
+# Learned Humanoid Get-Up Using Action Priors
 
 MuJoCo research code for training the 29-actuator Unitree G1 to stand from a
 fallen pose. The long-term goal is a reference-free get-up policy trained with
@@ -100,9 +100,6 @@ python scripts/evaluate_residual_ppo.py \
   on Legged Robots](https://arxiv.org/pdf/2505.10022)
 - [Demonstration-Guided Humanoid Stand-Up on an Emulated Deformable
   Surface](https://arxiv.org/pdf/2608.20852)
-
-The vendored MuJoCo Menagerie Unitree G1 model retains its included
-BSD-3-Clause license.
 
 ## Disclaimer
 
