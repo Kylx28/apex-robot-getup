@@ -11,11 +11,11 @@ frame-zero supine pose.
 
 In its recorded deterministic evaluation, it reached sustained standing in
 7.60 s, finished at 0.795 m pelvis height and 0.985 uprightness, and remained
-stable for 4.62 s. This policy is still reference-conditioned: it corrects the
-prior trajectory and is not yet the final reference-free APEX policy.
-
-Full APEX task/style critics, randomized fallen
-poses, multiple demonstrations, and domain randomization remain future work.
+stable for 4.62 s. This policy supplies the successful teacher used by the
+implemented APEX pipeline. APEX trains a reference-free actor with privileged
+style/task critics and selects checkpoints by prior-free frame-zero evaluation.
+Random falls, multiple demonstrations, and randomized physics remain future
+work.
 
 ## Training framework
 
@@ -32,6 +32,8 @@ poses, multiple demonstrations, and domain randomization remain future work.
   PyTorch PPO backend remains available for experiments.
 - Deterministic frame-zero evaluation selects the best checkpoint independently
   of periodic checkpoint snapshots.
+- APEX uses a 97-D reference-free actor, a 255-D privileged critic input,
+  separate style/task returns, and a decaying recorded teacher prior.
 
 ## Installation
 
@@ -62,11 +64,12 @@ SB3 PPO, and frame-zero resets:
 
 ```bash
 python scripts/train_apex_prior.py \
-  --config configs/residual_policy_milestone_1.yaml
+  --config configs/residual_policy_supine_stable_stand.yaml
 ```
 
 YAML contains the complete simulator, controller, reward, PPO, normalization,
 and output configuration. Explicit CLI options override supported YAML values.
+See `COMMANDS.md` for teacher export, APEX training, and prior-free evaluation.
 
 ## Evaluate and render
 

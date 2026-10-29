@@ -9,7 +9,7 @@ from typing import Any, Mapping, TypeVar
 
 import yaml
 
-from apex_getup.apex import PriorScheduleConfig
+from apex_getup.apex import ApexConfig, PriorScheduleConfig
 from apex_getup.env.config import JOINT_NAMES
 from apex_getup.rl import NormalizationConfig, PPOConfig
 from apex_getup.task import (
@@ -94,10 +94,17 @@ class TrainingRunConfig:
     num_envs: int = 1
     control_mode: str = "decaying-prior"
     residual_scale: float = 0.25
+    expert_path: Path | None = None
     task: GetUpTaskConfig = field(default_factory=GetUpTaskConfig)
     ppo: PPOConfig = field(default_factory=PPOConfig)
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     prior_schedule: PriorScheduleConfig = field(default_factory=PriorScheduleConfig)
+    apex: ApexConfig = field(default_factory=ApexConfig)
+
+    @property
+    def teacher_prior_path(self) -> Path | None:
+        """Legacy alias for expert_path."""
+        return self.expert_path
 
     def validate(self) -> None:
         if self.seed < 0:
@@ -114,21 +121,26 @@ class TrainingRunConfig:
             raise ValueError("smoothing_window must be positive")
         if self.num_envs <= 0:
             raise ValueError("num_envs must be positive")
-        if self.control_mode not in {"decaying-prior", "residual"}:
-            raise ValueError("control mode must be decaying-prior or residual")
+        if self.control_mode not in {"decaying-prior", "residual", "apex"}:
+            raise ValueError("control mode must be decaying-prior, residual, or apex")
+        if self.control_mode == "apex" and self.expert_path is None:
+            raise ValueError(
+                "APEX requires control.expert_path or control.teacher_prior_path"
+            )
         if not math.isfinite(self.residual_scale) or self.residual_scale < 0:
             raise ValueError("residual_scale must be non-negative and finite")
         self.task.validate()
         self.ppo.validate()
         self.normalization.validate()
         self.prior_schedule.validate()
+        self.apex.validate()
 
     @classmethod
     def from_mapping(cls, value: object) -> "TrainingRunConfig":
         root = _mapping(value, "configuration")
         allowed_sections = {
             "run", "training", "control", "task", "ppo", "normalization",
-            "prior_schedule"
+            "prior_schedule", "apex"
         }
         unknown_sections = set(root) - allowed_sections
         if unknown_sections:
@@ -151,7 +163,9 @@ class TrainingRunConfig:
                 f"unknown training fields: {sorted(unknown_training)}"
             )
         control = _mapping(root.get("control"), "control")
-        unknown_control = set(control) - {"mode", "residual_scale"}
+        unknown_control = set(control) - {
+            "mode", "residual_scale", "expert_path", "teacher_prior_path"
+        }
         if unknown_control:
             raise ValueError(
                 f"unknown control fields: {sorted(unknown_control)}"
@@ -186,6 +200,12 @@ class TrainingRunConfig:
         seed = int(run.get("seed", 0))
         ppo_values.setdefault("seed", seed)
 
+        if "expert_path" in control and "teacher_prior_path" in control:
+            raise ValueError(
+                "control.expert_path and control.teacher_prior_path are aliases; "
+                "set only one"
+            )
+        expert_path = control.get("expert_path", control.get("teacher_prior_path"))
         result = cls(
             seed=seed,
             total_steps=int(run.get("total_steps", 100_000)),
@@ -201,6 +221,11 @@ class TrainingRunConfig:
             num_envs=int(training.get("num_envs", 1)),
             control_mode=str(control.get("mode", "decaying-prior")),
             residual_scale=float(control.get("residual_scale", 0.25)),
+            expert_path=(
+                None
+                if expert_path is None
+                else Path(expert_path)
+            ),
             task=GetUpTaskConfig(**task_values),
             ppo=PPOConfig(**ppo_values),
             normalization=NormalizationConfig(
@@ -216,6 +241,9 @@ class TrainingRunConfig:
                     PriorScheduleConfig,
                     "prior_schedule",
                 )
+            ),
+            apex=ApexConfig(
+                **_strict_dataclass_kwargs(root.get("apex"), ApexConfig, "apex")
             ),
         )
         result.validate()

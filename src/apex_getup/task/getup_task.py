@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -23,6 +24,9 @@ from apex_getup.task.rewards import (
     RewardComponents,
     compute_task_reward,
 )
+
+if TYPE_CHECKING:
+    from apex_getup.apex.observations import ApexObservations
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,48 @@ class GetUpTask:
             self.env.action_scale,
             self.config.observation,
         )
+
+    def apex_observations(
+        self, state: RobotState | None = None
+    ) -> "ApexObservations":
+        """Return synchronized actor and privileged-critic observations.
+
+        This accessor reads one physical state and one reference sample without
+        advancing simulation or reference time.
+        """
+        from apex_getup.task.observations import build_apex_task_observations
+
+        if state is None:
+            state = self._last_state
+        if state is None:
+            raise RuntimeError(
+                "the task must be reset before constructing APEX observations"
+            )
+
+        reference = self.reference_sample()
+
+        simulated_qpos, simulated_qvel = self.env.generalized_state()
+        reference_qpos, reference_qvel = self._reference_generalized_state(
+            reference
+        )
+
+        return build_apex_task_observations(
+            state=state,
+            previous_executed_action=self.previous_action,
+            previous_policy_action=self.previous_policy_action,
+            joint_center=self.env.action_center,
+            joint_scale=self.env.action_scale,
+            config=self.config.observation,
+            simulated_qpos=simulated_qpos,
+            simulated_qvel=simulated_qvel,
+            reference_qpos=reference_qpos,
+            reference_qvel=reference_qvel,
+            reference_joint_positions=reference.q,
+            reference_joint_velocities=reference.qd,
+            standing_joint_positions=self.standing_joint_positions,
+            reference_phase=reference.phase,
+        )
+
 
     @staticmethod
     def _perturb_quaternion(

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 import numpy as np
+from numpy.typing import NDArray
 
 from apex_getup.apex import PriorCoefficientSchedule, compose_apex_action
 from apex_getup.control import compose_residual_joint_target
@@ -14,6 +16,13 @@ from apex_getup.rl.buffer import RolloutBuffer
 from apex_getup.rl.ppo import PPOAgent
 from apex_getup.rl.normalization import VecNormalizer
 from apex_getup.task import GetUpTask
+from apex_getup.task.observations import (
+    PAPER_REFERENCE_OBSERVATION_SIZE,
+    STATE_ONLY_OBSERVATION_SIZE,
+)
+
+if TYPE_CHECKING:
+    from apex_getup.apex.observations import ApexObservations
 
 
 @dataclass
@@ -36,6 +45,8 @@ class EpisodeAccumulator:
     scaled_policy_action_absolute: float = 0.0
     policy_to_prior_ratio: float = 0.0
     maximum_stable_standing_duration: float = 0.0
+    style_return: float = 0.0
+    task_return: float = 0.0
     reward_components: dict[str, float] = field(default_factory=dict)
     steps: int = 0
 
@@ -69,6 +80,12 @@ class EpisodeAccumulator:
                     )
         self.steps += 1
 
+    def add_group_rewards(self, rewards: NDArray[np.float64]) -> None:
+        if rewards.shape != (2,):
+            raise ValueError("APEX rewards must have shape (2,)")
+        self.style_return += float(rewards[0])
+        self.task_return += float(rewards[1])
+
     def add_action_statistics(
         self,
         policy_action: np.ndarray,
@@ -100,6 +117,8 @@ class EpisodeAccumulator:
         denominator = max(1, self.steps)
         summary = {
             "episode_return": self.episode_return,
+            "style_return": self.style_return,
+            "task_return": self.task_return,
             "initial_pelvis_height": self.initial_pelvis_height,
             "initial_uprightness": self.initial_uprightness,
             "success": float(info["episode_success"]),
@@ -149,6 +168,8 @@ class PPOTrainer:
         residual_scale: float | None = None,
         num_envs: int = 1,
         normalizer: VecNormalizer | None = None,
+        apex_actor_normalizer: VecNormalizer | None = None,
+        apex_critic_normalizer: VecNormalizer | None = None,
     ):
         if action_prior is None and (
             coefficient_schedule is not None or residual_scale is not None
@@ -179,6 +200,23 @@ class PPOTrainer:
         ):
             raise ValueError("normalizer dimensions must match the trainer")
         self.normalizer = normalizer
+        if (apex_actor_normalizer is None) != (apex_critic_normalizer is None):
+            raise ValueError(
+                "APEX actor and critic normalizers must be provided together"
+            )
+        for name, candidate, expected_size in (
+            ("actor", apex_actor_normalizer, STATE_ONLY_OBSERVATION_SIZE),
+            ("critic", apex_critic_normalizer, PAPER_REFERENCE_OBSERVATION_SIZE),
+        ):
+            if candidate is not None and (
+                candidate.num_envs != num_envs
+                or candidate.observation_size != expected_size
+            ):
+                raise ValueError(
+                    f"APEX {name} normalizer dimensions must match the trainer"
+                )
+        self.apex_actor_normalizer = apex_actor_normalizer
+        self.apex_critic_normalizer = apex_critic_normalizer
         self.action_prior = action_prior
         self.coefficient_schedule = coefficient_schedule
         self.residual_scale = residual_scale
@@ -207,6 +245,31 @@ class PPOTrainer:
             initial_pelvis_height=task.initial_pelvis_height,
             initial_uprightness=task.initial_uprightness,
         )
+
+    def collect_apex_observations(self) -> "ApexObservations":
+        """Collect one batched actor/critic observation pair per environment.
+
+        This read-only operation does not advance MuJoCo or reference time.
+        Each normalizer follows its own training/evaluation update mode.
+        """
+        from apex_getup.apex.observations import build_apex_observations
+
+        per_environment = [item.apex_observations() for item in self.tasks]
+        raw_actor = np.stack([item.actor for item in per_environment])
+        raw_critic = np.stack([item.critic for item in per_environment])
+        raw = build_apex_observations(raw_actor, raw_critic)
+
+        actor = (
+            raw.actor
+            if self.apex_actor_normalizer is None
+            else self.apex_actor_normalizer.normalize_observations(raw.actor)
+        )
+        critic = (
+            raw.critic
+            if self.apex_critic_normalizer is None
+            else self.apex_critic_normalizer.normalize_observations(raw.critic)
+        )
+        return build_apex_observations(actor, critic)
 
     def collect_rollout(
         self, steps: int | None = None
@@ -377,4 +440,138 @@ class PPOTrainer:
         }
         self.observation = self.observations[0]
         self.current_episode = self.current_episodes[0]
+        return buffer, completed
+
+    def collect_apex_rollout(
+        self, steps: int | None = None
+    ) -> tuple["ApexRolloutBuffer", list[dict[str, float]]]:
+        """Collect one asymmetric APEX rollout."""
+        from apex_getup.apex.agent import ApexAgent
+        from apex_getup.apex.rewards import split_reward_components
+        from apex_getup.apex.rollout import ApexRolloutBuffer
+
+        if not isinstance(self.agent, ApexAgent):
+            raise TypeError("collect_apex_rollout requires an ApexAgent")
+        if self.action_prior is None or self.coefficient_schedule is None:
+            raise ValueError("APEX requires an action prior and coefficient schedule")
+        if self.residual_scale is not None:
+            raise ValueError("APEX does not use residual control")
+        if self.apex_actor_normalizer is None or self.apex_critic_normalizer is None:
+            raise ValueError("APEX observation normalizers are required")
+
+        count = steps or self.agent.config.rollout_steps
+        buffer = ApexRolloutBuffer.create(
+            count,
+            STATE_ONLY_OBSERVATION_SIZE,
+            PAPER_REFERENCE_OBSERVATION_SIZE,
+            self.task.action_size,
+            self.num_envs,
+        )
+        observations = self.collect_apex_observations()
+        completed: list[dict[str, float]] = []
+        last_dones = np.zeros(self.num_envs, dtype=np.bool_)
+        inference_time = 0.0
+        simulation_time = 0.0
+        rollout_start = perf_counter()
+        for _ in range(count):
+            inference_start = perf_counter()
+            policy_actions, latent_actions, log_probabilities, values = (
+                self.agent.sample_actions(observations.actor, observations.critic)
+            )
+            inference_time += perf_counter() - inference_start
+            prior_actions = np.stack(
+                [
+                    self.action_prior.action_at_time(task.current_reference_time)
+                    for task in self.tasks
+                ]
+            )
+            coefficient = self.coefficient_schedule(
+                self.global_environment_steps
+            )
+            prior_coefficients = np.full(self.num_envs, coefficient)
+            executed_actions, clipping_masks = compose_apex_action(
+                policy_actions, prior_actions, coefficient
+            )
+            group_rewards = np.zeros((self.num_envs, 2))
+            dones = np.zeros(self.num_envs, dtype=np.bool_)
+            timeout_indices: list[int] = []
+            timeout_critic_observations: list[np.ndarray] = []
+            simulation_start = perf_counter()
+            for index, task in enumerate(self.tasks):
+                result = task.step(
+                    executed_actions[index],
+                    policy_action=policy_actions[index],
+                )
+                groups = split_reward_components(result.info["reward_components"])
+                if not np.isclose(groups.total, result.reward, atol=1e-9):
+                    raise RuntimeError("APEX reward split does not match task reward")
+                group_rewards[index] = groups.as_array()
+                done = result.terminated or result.truncated
+                dones[index] = done
+                self.current_episodes[index].add(result.reward, result.info)
+                self.current_episodes[index].add_group_rewards(group_rewards[index])
+                self.current_episodes[index].add_action_statistics(
+                    policy_actions[index],
+                    prior_actions[index],
+                    executed_actions[index],
+                    coefficient,
+                    clipping_masks[index],
+                    1.0,
+                )
+                if result.truncated and not result.terminated:
+                    timeout_indices.append(index)
+                    timeout_critic_observations.append(
+                        task.apex_observations().critic
+                    )
+                if done:
+                    summary = self.current_episodes[index].finish(result.info)
+                    summary["environment_step"] = float(
+                        self.global_environment_steps + index + 1
+                    )
+                    summary["environment_index"] = float(index)
+                    completed.append(summary)
+                    task.reset()
+                    self.current_episodes[index] = self._new_episode_accumulator(task)
+            timeout_values = np.zeros((self.num_envs, 2))
+            if timeout_indices:
+                timeout_batch = self.apex_critic_normalizer.normalize_observations(
+                    np.stack(timeout_critic_observations), update=False
+                )
+                timeout_values[timeout_indices] = self.agent.values(timeout_batch)
+            simulation_time += perf_counter() - simulation_start
+            buffer.add(
+                observations.actor,
+                observations.critic,
+                policy_actions,
+                executed_actions,
+                prior_actions,
+                prior_coefficients,
+                clipping_masks,
+                latent_actions,
+                log_probabilities,
+                group_rewards,
+                values,
+                dones,
+                timeout_values,
+            )
+            self.global_environment_steps += self.num_envs
+            observations = self.collect_apex_observations()
+            last_dones = dones
+        next_values = self.agent.values(observations.critic)
+        next_values[last_dones] = 0.0
+        buffer.finish(
+            next_values,
+            self.agent.config.gamma,
+            self.agent.config.gae_lambda,
+        )
+        elapsed = perf_counter() - rollout_start
+        self.last_rollout_metrics = {
+            "environment_steps_per_second": buffer.transition_count / elapsed,
+            "policy_inference_time": inference_time,
+            "simulation_rollout_time": simulation_time,
+            "prior_coefficient": self.coefficient_schedule(
+                self.global_environment_steps
+            ),
+        }
+        self.agent.global_environment_steps = self.global_environment_steps
         return buffer, completed

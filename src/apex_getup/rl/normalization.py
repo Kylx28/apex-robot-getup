@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Mapping
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -198,3 +198,92 @@ class VecNormalizer:
         if stored_returns.shape == (environment_count,):
             result.discounted_returns = stored_returns.copy()
         return result
+
+
+def create_apex_observation_normalizers(
+    actor_observation_size: int,
+    critic_observation_size: int,
+    num_envs: int,
+    gamma: float,
+    config: NormalizationConfig | None = None,
+    *,
+    training: bool = True,
+) -> tuple[VecNormalizer, VecNormalizer]:
+    """Create independent actor and privileged-critic normalizers."""
+    base_config = config or NormalizationConfig()
+    critic_config = replace(
+        base_config,
+        normalize_rewards=False,
+    )
+
+    actor_normalizer = VecNormalizer(
+        actor_observation_size,
+        num_envs,
+        gamma,
+        base_config,
+        training=training,
+    )
+    critic_normalizer = VecNormalizer(
+        critic_observation_size,
+        num_envs,
+        gamma,
+        critic_config,
+        training=training,
+    )
+
+    return actor_normalizer, critic_normalizer
+
+
+APEX_NORMALIZATION_FORMAT_VERSION = 1
+
+
+def apex_normalization_state_dict(
+    actor_normalizer: VecNormalizer,
+    critic_normalizer: VecNormalizer,
+) -> dict[str, object]:
+    """Return a versioned checkpoint payload for both observation streams."""
+    if actor_normalizer.num_envs != critic_normalizer.num_envs:
+        raise ValueError("APEX normalizers must have equal environment counts")
+    if not np.isclose(actor_normalizer.gamma, critic_normalizer.gamma):
+        raise ValueError("APEX normalizers must use the same gamma")
+    if actor_normalizer.training != critic_normalizer.training:
+        raise ValueError("APEX normalizers must use the same training mode")
+    if critic_normalizer.config.normalize_rewards:
+        raise ValueError("the APEX critic normalizer cannot normalize rewards")
+    return {
+        "format_version": APEX_NORMALIZATION_FORMAT_VERSION,
+        "actor": actor_normalizer.state_dict(),
+        "critic": critic_normalizer.state_dict(),
+    }
+
+
+def load_apex_observation_normalizers(
+    state: Mapping[str, object],
+    *,
+    training: bool,
+    num_envs: int | None = None,
+) -> tuple[VecNormalizer, VecNormalizer]:
+    """Restore independent actor/critic normalizers from a checkpoint payload."""
+    if int(state.get("format_version", -1)) != APEX_NORMALIZATION_FORMAT_VERSION:
+        raise ValueError("unsupported APEX normalization format")
+    if "actor" not in state or "critic" not in state:
+        raise ValueError("APEX normalization state requires actor and critic entries")
+    if num_envs is not None and num_envs <= 0:
+        raise ValueError("num_envs must be positive")
+    actor_state = state["actor"]
+    critic_state = state["critic"]
+    if not isinstance(actor_state, Mapping) or not isinstance(critic_state, Mapping):
+        raise ValueError("APEX actor and critic normalization states must be mappings")
+    actor = VecNormalizer.from_state_dict(
+        dict(actor_state), training=training, num_envs=num_envs
+    )
+    critic = VecNormalizer.from_state_dict(
+        dict(critic_state), training=training, num_envs=num_envs
+    )
+    if actor.num_envs != critic.num_envs:
+        raise ValueError("restored APEX normalizers have different environment counts")
+    if not np.isclose(actor.gamma, critic.gamma):
+        raise ValueError("restored APEX normalizers use different gamma values")
+    if critic.config.normalize_rewards:
+        raise ValueError("restored APEX critic normalizer cannot normalize rewards")
+    return actor, critic

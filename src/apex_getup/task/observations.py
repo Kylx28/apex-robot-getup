@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from apex_getup.env.config import NUM_ACTUATORS
 from apex_getup.env.observations import RobotState
 from apex_getup.task.config import ObservationConfig
+
+if TYPE_CHECKING:
+    from apex_getup.apex.observations import ApexObservations
 
 
 STATE_ONLY_OBSERVATION_SIZE = 97
@@ -98,6 +103,55 @@ def build_actor_observation(
             "actor observation has an invalid shape or non-finite value"
         )
     return np.clip(observation, -config.clip, config.clip)
+
+
+def build_apex_task_observations(
+    *,
+    state: RobotState,
+    previous_executed_action: ArrayLike,
+    previous_policy_action: ArrayLike,
+    joint_center: ArrayLike,
+    joint_scale: ArrayLike,
+    config: ObservationConfig,
+    simulated_qpos: ArrayLike,
+    simulated_qvel: ArrayLike,
+    reference_qpos: ArrayLike,
+    reference_qvel: ArrayLike,
+    reference_joint_positions: ArrayLike,
+    reference_joint_velocities: ArrayLike,
+    standing_joint_positions: ArrayLike,
+    reference_phase: float,
+) -> "ApexObservations":
+    """Build reference-free actor and privileged critic observations."""
+
+    from apex_getup.apex.observations import build_apex_observations
+
+    actor_observation = build_actor_observation(
+        state,
+        previous_executed_action,
+        joint_center,
+        joint_scale,
+        config,
+    )
+
+    critic_observation = build_paper_reference_observation(
+        simulated_qpos,
+        simulated_qvel,
+        reference_qpos,
+        reference_qvel,
+        state.joint_positions,
+        state.joint_velocities,
+        reference_joint_positions,
+        reference_joint_velocities,
+        standing_joint_positions,
+        reference_phase,
+        previous_policy_action,
+    )
+
+    return build_apex_observations(
+        actor_observation,
+        critic_observation,
+    )
 
 
 def build_paper_reference_observation(

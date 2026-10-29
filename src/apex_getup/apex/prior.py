@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from apex_getup.demonstrations import DemonstrationActionPrior
+from apex_getup.apex.teacher import ActionPrior
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ def compose_apex_action(
 class FixedCoefficientPriorAdapter:
     """Evaluation adapter for a fixed guided or prior-free coefficient."""
 
-    def __init__(self, prior: DemonstrationActionPrior, coefficient: float):
+    def __init__(self, prior: ActionPrior, coefficient: float):
         if not np.isfinite(coefficient) or not 0.0 <= coefficient <= 1.0:
             raise ValueError("evaluation coefficient must lie in [0, 1]")
         self.prior = prior

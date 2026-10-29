@@ -46,6 +46,68 @@ def _mlp(
     return nn.Sequential(*layers)
 
 
+def squashed_gaussian_log_probability(
+    latent: Tensor,
+    action: Tensor,
+    mean: Tensor,
+    log_std: Tensor,
+) -> Tensor:
+    """Log probability of a tanh-squashed diagonal Gaussian sample."""
+    distribution = torch.distributions.Normal(mean, log_std.exp())
+    gaussian = distribution.log_prob(latent)
+    correction = torch.log(1.0 - action.square() + 1e-6)
+    return (gaussian - correction).sum(dim=-1)
+
+
+class SquashedGaussianActor(nn.Module):
+    """Tanh-squashed Gaussian actor shared by PPO and APEX."""
+
+    def __init__(
+        self,
+        observation_size: int,
+        action_size: int,
+        hidden_dimensions: tuple[int, ...],
+        initial_action_std: float,
+    ) -> None:
+        super().__init__()
+        self.mean_network = _mlp(
+            observation_size,
+            hidden_dimensions,
+            action_size,
+            output_gain=0.01,
+        )
+        self.log_std = nn.Parameter(
+            torch.full(
+                (action_size,),
+                float(np.log(initial_action_std)),
+                dtype=torch.float32,
+            )
+        )
+
+    def forward(self, observations: Tensor) -> Tensor:
+        return self.mean_network(observations)
+
+    def sample(
+        self, observations: Tensor, generator: torch.Generator
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        mean = self(observations)
+        latent = mean + self.log_std.exp() * torch.randn(
+            mean.shape, generator=generator, device=mean.device
+        )
+        action = torch.tanh(latent)
+        log_probability = squashed_gaussian_log_probability(
+            latent, action, mean, self.log_std
+        )
+        return action, latent, log_probability
+
+    def log_probability(
+        self, observations: Tensor, latent: Tensor, action: Tensor
+    ) -> Tensor:
+        return squashed_gaussian_log_probability(
+            latent, action, self(observations), self.log_std
+        )
+
+
 class PPOAgent:
     def __init__(
         self,
@@ -61,26 +123,20 @@ class PPOAgent:
         torch.manual_seed(self.config.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.config.seed)
-        self.actor = _mlp(
+        self.policy = SquashedGaussianActor(
             observation_size,
-            self.config.actor_hidden_dimensions,
             action_size,
-            output_gain=0.01,
+            self.config.actor_hidden_dimensions,
+            self.config.initial_action_std,
         ).to(self.device)
+        self.actor = self.policy.mean_network
+        self.log_std = self.policy.log_std
         self.critic = _mlp(
             observation_size,
             self.config.critic_hidden_dimensions,
             1,
             output_gain=1.0,
         ).to(self.device)
-        self.log_std = nn.Parameter(
-            torch.full(
-                (action_size,),
-                float(np.log(self.config.initial_action_std)),
-                dtype=torch.float32,
-                device=self.device,
-            )
-        )
         self.optimizer = torch.optim.Adam(
             [*self.actor.parameters(), *self.critic.parameters(), self.log_std],
             lr=self.config.learning_rate,
@@ -113,8 +169,7 @@ class PPOAgent:
         self, observation: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         with torch.no_grad():
-            mean = self.actor(self._observation_tensor(observation))
-            action = torch.tanh(mean)
+            action = torch.tanh(self.policy(self._observation_tensor(observation)))
         return action.cpu().numpy().astype(np.float64)
 
     def sample_action(
@@ -139,14 +194,9 @@ class PPOAgent:
             raise ValueError("observations must have shape [batch, observation_size]")
         with torch.no_grad():
             observation_tensor = self._observation_tensor(array)
-            mean = self.actor(observation_tensor)
-            standard_deviation = self.log_std.exp()
-            noise = torch.randn(
-                mean.shape, generator=self.generator, device=self.device
+            action, latent, log_probability = self.policy.sample(
+                observation_tensor, self.generator
             )
-            latent = mean + standard_deviation * noise
-            action = torch.tanh(latent)
-            log_probability = self._log_probability_tensor(latent, action, mean)
             value = self.critic(observation_tensor).squeeze(-1)
         return (
             action.cpu().numpy().astype(np.float64),
@@ -158,10 +208,9 @@ class PPOAgent:
     def _log_probability_tensor(
         self, latent: Tensor, action: Tensor, mean: Tensor
     ) -> Tensor:
-        distribution = torch.distributions.Normal(mean, self.log_std.exp())
-        gaussian = distribution.log_prob(latent)
-        correction = torch.log(1.0 - action.square() + 1e-6)
-        return (gaussian - correction).sum(dim=-1)
+        return squashed_gaussian_log_probability(
+            latent, action, mean, self.log_std
+        )
 
     def policy_log_probability(
         self,
